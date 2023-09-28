@@ -13,7 +13,7 @@ optional arguments:
   -h, --help            show this help message and exit
   -input_dir INPUT_DIR  the directory where the input jsonls are stored
   -output_dir OUTPUT_DIR
-                        the directory where the outpuf jsonls are stored
+                        the directory where the output jsonls are stored
   -num_jobs NUM_JOBS    the number of jobs
   -buffer_size BUFFER_SIZE
                         buffer for document reading for multiprocessing
