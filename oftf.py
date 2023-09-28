@@ -422,7 +422,8 @@ dHash = {}
 urlHash = {}
 
 def process_non_code_lang_data(l, min_text_len, lang, flagged_score_cutoff, hate_score, banned_score_cutoff, stopword_cutoff, sentence_ratio, non_english_header_ratio, \
-                               cleanup_num_header_footer_sent_len, cleanup_header_footer_sent, dedup_para_len, junk_char_score_cutoff, ngram_cutoff):
+                               cleanup_num_header_footer_sent_len, cleanup_header_footer_sent, dedup_para_len, junk_char_score_cutoff, ngram_cutoff, \
+                               flagged_score_cutoff, banned_score_cutoff, hate_score_cutoff, ):
                                  
     period = lang2period.get(lang, '.')
     is_cjk = lang_is_cjk(lang)
@@ -453,7 +454,7 @@ def process_non_code_lang_data(l, min_text_len, lang, flagged_score_cutoff, hate
     flagged_score, banned_score, hate_score = get_flaggedword_score(text, lang)
     if flagged_score > flagged_score_cutoff: return None
     if flagged_score > 0.01 and banned_score > banned_score_cutoff: return None
-    if hate_score > hate_score: return None
+    if hate_score > hate_score_cutoff: return None
     if flagged_score > 0.01 and hate_score > hate_score*2: return None
 
     # this may clean up headers that have boilerplate text
@@ -573,7 +574,7 @@ if __name__ == "__main__":
     parser.add_argument('-num_jobs', type=int, default=1000, help='the number of jobs')
     parser.add_argument('-buffer_size', type=int, default=1000, help='buffer for document reading for multiprocessing')
     parser.add_argument('-min_text_len', type=int, default=1000, help='minimum document length in chars')
-    parser.add_argument('-language', type=str, default='en', help='the expected language of the documents')
+    parser.add_argument('-lang', type=str, default='en', help='the expected language of the documents')
     parser.add_argument('-header_footer_dedup_len', type=int, default=100, help='use the first N chars and the last N chars to do exact dedup')
     parser.add_argument('-cleanup_header_footer_sent_len', type=int, default=20, help='minimum sentence length required before deciding to remove this sentence as reptitive')
     parser.add_argument('-cleanup_num_header_footer_sent', type=int, default=20, help='remove repetitive sentences in the header or footer within the first or last N sentences')
@@ -589,16 +590,34 @@ if __name__ == "__main__":
     output_dir = args.output_dir
     num_jobs = args.num_jobs
     buffer_size = args.buffer_size
-    language = args.language
+    lang = args.lang
     min_text_len = args.min_text_len
-
+    header_footer_dedup_len = args.header_footer_dedup_len
+    cleanup_header_footer_sent_len = args.cleanup_header_footer_sent_len
+    cleanup_num_header_footer_sent = args.cleanup_num_header_footer_sent
+    cleanup_dup_para_len = args.cleanup_dup_para_len
+    sentence_ratio = args.sentence_ratio
+    stopword_cutoff = args.stopword_cutoff
+    junk_char_score_cutoff = args.junk_char_score_cutoff
+    ngram_cutoff = args.ngram_cutoff
+      
   
     files = list(set(glob.glob(input_dir+"*.jsonl")))
     files.sort()
     for file in files:
           with open(output_dir+"*.josnl") as outf:
               with multiprocessing.Pool(processes=num_jobs) as pool:
-                  for idx, l in tqdm.tqdm(enumerate(pool.imap_unordered(functools.partial(process_non_code_lang_data, min_text_len=min_text_len, lang=language), yield_jsonl(file), buffer_size))):
+                  for idx, l in tqdm.tqdm(enumerate(pool.imap_unordered(functools.partial(process_non_code_lang_data, \
+                                                                      min_text_len=min_text_len, lang=lang, \
+                                                                      header_footer_dedup_len = header_footer_dedup_len, \
+                                                                      cleanup_header_footer_sent_len = cleanup_header_footer_sent_len, \
+                                                                      cleanup_num_header_footer_sent = cleanup_num_header_footer_sent, \
+                                                                      cleanup_dup_para_len = cleanup_dup_para_len, \
+                                                                      sentence_ratio = sentence_ratio, \
+                                                                      stopword_cutoff = stopword_cutoff, \
+                                                                      junk_char_score_cutoff = junk_char_score_cutoff, \
+                                                                      ngram_cutoff = ngram_cutoff, \
+                                                                      ), yield_jsonl(file), buffer_size))):
                       if l:
                           outf.write (l+"\n")
   
