@@ -326,7 +326,7 @@ def get_ngram_score(text, lang, window_size=3):
   if not aHash: return 0.0
   return aHash.most_common(1)[0][1]
   
-def get_special_char_score (text, lang):
+def get_junk_char_score (text, lang):
   if len(text) == 0: return 1
   #TODO: do we want to do any lang specific special_chars?
   return len([a for a in text if a in special_chars])/len(text)
@@ -421,9 +421,9 @@ cHash = {}
 dHash = {}
 urlHash = {}
 
-def process_non_code_lang_data(l, min_text_len, lang, flagged_score_cutoff, hate_score, banned_score_cutoff, stopword_cutoff, sentence_ratio, non_english_header_ratio, \
-                               cleanup_num_header_footer_sent_len, cleanup_header_footer_sent, dedup_para_len, junk_char_score_cutoff, ngram_cutoff, \
-                               flagged_score_cutoff, banned_score_cutoff, hate_score_cutoff, ):
+header_footer_hash = {}
+def process_non_code_lang_data(l, min_text_len, lang, flagged_score_cutoff, hate_score_cutoff, banned_score_cutoff, stopword_score_cutoff, sentence_ratio, english_stopwords_header_ratio, \
+                               cleanup_num_header_footer, cleanup_header_footer_len, cleanup_header_footer_agressive, junk_char_score_cutoff, ngram_cutoff, dedup_window, cleanup_dup_para_len):
                                  
     period = lang2period.get(lang, '.')
     is_cjk = lang_is_cjk(lang)
@@ -435,71 +435,112 @@ def process_non_code_lang_data(l, min_text_len, lang, flagged_score_cutoff, hate
     orig_txt = text = dat['text']
     if len(orig_txt) < min_text_len: return
     if is_cjk:
-      if len(orig_txt) > 200:
-          txt = orig_txt[:200]
+      if len(orig_txt) > 400:
+          txt = orig_txt[:400]
       else:
           txt = orig_txt
     else:
       # we assume words are an average of 4 char, plus one space
-      if len(orig_txt) > 1000:
-          txt = orig_txt[:1000]
+      if len(orig_txt) > 2000:
+          txt = orig_txt[:2000]
       else:
           txt = orig_txt
+
+    if dedup_window:
+      # do a very basic document dedup 
+      code = hash(txt[:dedup_window].replace(" ", "").replace("\n", "").replace("\r", "").lower())
+      if code in aHash: return
+      aHash[code] = 1
+      code = hash(txt[-dedup_window:].replace(" ", "").replace("\n", "").replace("\r", "").lower())
+      if code in aHash: return
+      aHash[code] = 1
+
     orig_txt2 = orig_txt.replace("¿", period).replace("?", period).replace("!", period).replace("\n", period)
     if orig_txt2.count(period)/len(orig_txt) < sentence_ratio: return
     text = dat['text']
     if len(text) > min_text_len: text = text[:min_text_len]                                
     if ngram_cutoff and get_ngram_score(text, lang) >= ngram_cutoff: return
-    if junk_char_score_cutoff and get_junk_char_score(text, lang) >= junk_char_cutoff: return  
+    if junk_char_score_cutoff and get_junk_char_score(text, lang) >= junk_char_score_cutoff: return  
     flagged_score, banned_score, hate_score = get_flaggedword_score(text, lang)
     if flagged_score > flagged_score_cutoff: return None
     if flagged_score > 0.01 and banned_score > banned_score_cutoff: return None
     if hate_score > hate_score_cutoff: return None
     if flagged_score > 0.01 and hate_score > hate_score*2: return None
 
-    # this may clean up headers that have boilerplate text
-    # we could alternatively remove everything up to the point where there is a repetiton
-    if cleanup_num_header_footer_sent:
+    # this may clean up headers that have boilerplate text.
+    # either remove only boiler plate
+    # or if cleanup_header_footer_agressive is set, we could alternatively remove everything up to the point where there is a repetiton
+    if cleanup_num_header_footer:
         # split by periods
         orig_arr = orig_txt.split(period)
-        for idx, s in enumerate(orig_arr[:min(len(orig_arr), cleanup_num_header_footer_sent)]):
+        len_orig_arr = len(orig_arr)
+        for idx in range(min(len_orig_arr, cleanup_num_header_footer)):
+              s = orig_arr[idx]
+              if not s: continue          
               s = s.strip()
-              if len(s) > cleanup_header_footer_sent_len:
+              if len(s) > cleanup_header_footer_len:
                 code = hash(s.replace(" ", "").replace("\n", "").lower())
                 if code in bHash:
                   orig_arr[idx] = None
+                  if cleanup_header_footer_agressive:
+                    for idx2 in range(0, idx):
+                      oirg_arr[idx2] = None
                   continue
                 bHash[code] = 1
-        for idx, s in enumerate(orig_arr[-min(len(orig_arr), cleanup_num_header_footer_sent):]):
+        if len_orig_arr > 2*cleanup_num_header_footer:
+          for idx in range(len_orig_arr-cleanup_num_header_footer, len_orig_arr):
+              s = orig_arr[idx]
+              if not s: continue
               s = s.strip()
-              if len(s) > cleanup_header_footer_sent_len:
+              if len(s) > cleanup_header_footer_len:
                 code = hash(s.replace(" ", "").replace("\n", "").lower())
                 if code in bHash:
                   orig_arr[idx] = None
+                  if cleanup_header_footer_agressive:
+                    for idx2 in range(idx, len_orig_arr):
+                      orig_arr[idx] = None
+                      break
                   continue
                 bHash[code] = 1                
-        orig_txt = period.join(a for a in orig_arr if a is None)
+        orig_txt = period.join(a for a in orig_arr if a is not None)
         if len(orig_txt) < min_text_len: return
         
         #split by line break
         orig_arr = orig_txt.split("\n")
-        for idx, s in enumerate(orig_arr[:min(len(orig_arr), cleanup_num_header_footer_sent)]):
+        len_orig_arr = len(orig_arr)
+        for idx in range(min(len_orig_arr, cleanup_num_header_footer)):
+              s = orig_arr[idx]
+              if not s: continue          
               s = s.strip()
-              if len(s) > cleanup_header_footer_sent_len:
-                code = hash(s.replace(" ", "").replace("\n", "").lower())
-                if code in cHash:
-                  orig_arr[idx] = None
-                  continue
-                cHash[code] = 1
-        for idx, s in enumerate(orig_arr[-min(len(orig_arr), cleanup_num_header_footer_sent):]):
+              code = hash(s.replace(" ", "").replace("\n", "").lower())
+              if code in cHash:
+                 cHash[code] = cHash.get(code,0) + 1                
+                 if  len(s) > cleanup_header_footer_len or cHash[code] > 20:
+                   orig_arr[idx] = None
+                   if cleanup_header_footer_agressive:
+                     for idx2 in range(0, idx):
+                       oirg_arr[idx2] = None
+                   continue
+              else:
+                cHash[code] = cHash.get(code,0) + 1                                   
+        if len_orig_arr > 2*cleanup_num_header_footer:                  
+          for idx in range(len_orig_arr-cleanup_num_header_footer, len_orig_arr):
+              s = orig_arr[idx]
+              if not s: continue          
               s = s.strip()
-              if len(s) > cleanup_header_footer_sent_len:
-                code = hash(s.replace(" ", "").replace("\n", "").lower())
-                if code in cHash:
-                  orig_arr[idx] = None
-                  continue
-                cHash[code] = 1                
-        orig_txt = "\n".join(a for a in orig_arr if a is None)
+              code = hash(s.replace(" ", "").replace("\n", "").lower())
+              if code in cHash:
+                 cHash[code] = cHash.get(code,0) + 1                
+                 if  len(s) > cleanup_header_footer_len or cHash[code] > 20:
+                   orig_arr[idx] = None
+                   if cleanup_header_footer_agressive:
+                     for idx2 in range(idx, len_orig_arr):
+                       orig_arr[idx] = None
+                       break
+                   continue
+              else:
+                cHash[code] = cHash.get(code,0) + 1                                   
+        orig_txt = "\n".join(a for a in orig_arr if a is not None)
         if len(orig_txt) < min_text_len: return
           
     if cleanup_dup_para_len:
@@ -512,10 +553,10 @@ def process_non_code_lang_data(l, min_text_len, lang, flagged_score_cutoff, hate
                   orig_arr[idx] = None
                   continue
                 dHash[code] = 1             
-        orig_txt = "\n".join(a for a in orig_arr if a is None)
+        orig_txt = "\n".join(a for a in orig_arr if a is not None)
         if len(orig_txt) < min_text_len: return
           
-    orig_txt = orig_txt..strip()
+    orig_txt = orig_txt.strip()
     if orig_txt[-1] not in "¿?!."+period: orig_txt = orig_txt + period
     if is_cjk:
       if len(orig_txt) > 200:
@@ -529,20 +570,22 @@ def process_non_code_lang_data(l, min_text_len, lang, flagged_score_cutoff, hate
       else:
           txt = orig_txt
     score = get_stopword_score(txt, lang)
-    if score < stopword_cutoff: return
+    if score < stopword_score_cutoff: return
 
-    if header_footer_dedup_len:
-      # do a very basic header footer dedup 
-      code = hash(txt[:header_footer_dedup_len].replace(" ", "").replace("\n", "").replace("\r", "").lower())
+    if dedup_window:
+      # do a very basic document dedup 
+      code = hash(txt[:dedup_window].replace(" ", "").replace("\n", "").replace("\r", "").lower())
       if code in aHash: return
       aHash[code] = 1
-      code = hash(txt[-header_footer_dedup_len:].replace(" ", "").replace("\n", "").replace("\r", "").lower())
+      code = hash(txt[-dedup_window:].replace(" ", "").replace("\n", "").replace("\r", "").lower())
       if code in aHash: return
       aHash[code] = 1
 
-    if non_english_header_ratio > 0:
+
+    if lang != 'en' and english_stopwords_header_ratio > 0:
       score = get_stopword_score(txt, 'en')
-      if score > 1 - non_english_header_ratio: return
+      if score > english_stopwords_header_ratio:
+        return
         
     if True: 
       dat['text'] = orig_txt
@@ -555,14 +598,35 @@ def process_non_code_lang_data(l, min_text_len, lang, flagged_score_cutoff, hate
       del meta['scores']
       del meta['langs']
       dat = {'text': orig_txt, 'meta': meta}
+    #print (orig_txt)
     return json.dumps(dat)
+
+import gzip, lzma
+import io
+import zstandard as zstd
+DCTX = zstd.ZstdDecompressor(max_window_size=2**31)
 
 # change this to whatever jsonl format you use
 def yield_jsonl(file):
+  if file.endswith(".gz"):
+    for l in gzip.open(file):
+        yield l.decode()
+  elif file.endswith(".zst"):
+    with (
+        zstd.open(file, mode='rb', dctx=DCTX) as zfh,
+        io.TextIOWrapper(zfh) as iofh
+    ):
+        for line in iofh:
+            yield line
+  elif file.endswith(".xz"):
+    for l in lzma.open(file):
+        yield l.decode()
+  else:
     for l in open(file):
         yield l
+      
 
-import tqdm
+import tqdm, os
                           
 
 if __name__ == "__main__":
@@ -570,19 +634,25 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-input_dir', type=str, default="input/",  help='the directory where the input jsonls are stored')
-    parser.add_argument('-output_dir', type=str, default="output/",  help='the directory where the outpuf jsonls are stored')
+    parser.add_argument('-output_dir', type=str, default="output/",  help='the directory where the output jsonls are stored')
     parser.add_argument('-num_jobs', type=int, default=1000, help='the number of jobs')
     parser.add_argument('-buffer_size', type=int, default=1000, help='buffer for document reading for multiprocessing')
     parser.add_argument('-min_text_len', type=int, default=1000, help='minimum document length in chars')
     parser.add_argument('-lang', type=str, default='en', help='the expected language of the documents')
-    parser.add_argument('-header_footer_dedup_len', type=int, default=100, help='use the first N chars and the last N chars to do exact dedup')
-    parser.add_argument('-cleanup_header_footer_sent_len', type=int, default=20, help='minimum sentence length required before deciding to remove this sentence as reptitive')
-    parser.add_argument('-cleanup_num_header_footer_sent', type=int, default=20, help='remove repetitive sentences in the header or footer within the first or last N sentences')
+    parser.add_argument('-dedup_window', type=int, default=100, help='use the first N chars and the last N chars to do exact dedup')
+    parser.add_argument('-cleanup_header_footer_len', type=int, default=20, help='lines above this length that are repteated will be filtered out. lines below this length that are repeated >= 20 times are also filtered')
+    parser.add_argument('-cleanup_num_header_footer', type=int, default=20, help='remove repetitive sentences or linnes in the header or footer within the first or last N sentences')
+    parser.add_argument('-cleanup_header_footer_agressive', type=int, default=0, help='whether to remove everything beffore the repeated line in the header and everything after the repeated line in the footer')
     parser.add_argument('-cleanup_dup_para_len', type=int, default=100, help='minimum para length required before deciding to remove this paragraph as repetitive')  
     parser.add_argument('-sentence_ratio', type=float, default=0.006, help='ratio of sentence to all chars cutoff for first 200 words')
-    parser.add_argument('-stopword_cutoff', type=float, default=0.1, help='ratio of stopwords to non-stopwords cutoff for first 200 words')
-    parser.add_argument('-junk_char_score_cutoff', type=float, default=.4, default=0.1, help='ratio of stopwords to non-stopwords cutoff for first 200 words')
-    parser.add_argument('-ngram_cutoff', type=float, default=.2, default=0.1, help='ratio of stopwords to non-stopwords cutoff for first 200 words')
+    parser.add_argument('-stopword_score_cutoff', type=float, default=0.1, help='ratio of stopwords to non-stopwords cutoff for first 200 words')
+    parser.add_argument('-junk_char_score_cutoff', type=float, default=.4, help='ratio of special chars to all words for first 200 words')
+    parser.add_argument('-ngram_cutoff', type=float, default=.2, help='ratio repeated n grams to all words cutoff for first 200 words')
+    parser.add_argument('-force_overwrite', type=int, default=0, help='overwrite existing processed files')
+    parser.add_argument('-flagged_score_cutoff', type=float, default=0.05, help='cutoff proportion of flagged words')
+    parser.add_argument('-hate_score_cutoff', type=float, default=0.01, help='cutoff proportion of hate words')
+    parser.add_argument('-banned_score_cutoff', type=float, default=0.01, help='cutoff proportion of banned words')
+    parser.add_argument('-english_stopwords_header_ratio', type=float, default=0.0, help='cutoff of ratio of english stopwords in the header')    
     
     args = parser.parse_args()
 
@@ -592,31 +662,45 @@ if __name__ == "__main__":
     buffer_size = args.buffer_size
     lang = args.lang
     min_text_len = args.min_text_len
-    header_footer_dedup_len = args.header_footer_dedup_len
-    cleanup_header_footer_sent_len = args.cleanup_header_footer_sent_len
-    cleanup_num_header_footer_sent = args.cleanup_num_header_footer_sent
+    dedup_window = args.dedup_window
+    cleanup_header_footer_len = args.cleanup_header_footer_len
+    cleanup_num_header_footer = args.cleanup_num_header_footer
     cleanup_dup_para_len = args.cleanup_dup_para_len
     sentence_ratio = args.sentence_ratio
-    stopword_cutoff = args.stopword_cutoff
+    stopword_score_cutoff = args.stopword_score_cutoff
     junk_char_score_cutoff = args.junk_char_score_cutoff
     ngram_cutoff = args.ngram_cutoff
-      
-  
-    files = list(set(glob.glob(input_dir+"*.jsonl")))
+    force_overwrite = args.force_overwrite
+    flagged_score_cutoff = args.flagged_score_cutoff
+    banned_score_cutoff = args.banned_score_cutoff
+    hate_score_cutoff = args.hate_score_cutoff
+    english_stopwords_header_ratio = args.english_stopwords_header_ratio    
+    cleanup_header_footer_agressive = args.cleanup_header_footer_agressive
+    
+    files = list(set(glob.glob(input_dir+"/*.jsonl*")))
     files.sort()
     for file in files:
-          with open(output_dir+"*.josnl") as outf:
-              with multiprocessing.Pool(processes=num_jobs) as pool:
-                  for idx, l in tqdm.tqdm(enumerate(pool.imap_unordered(functools.partial(process_non_code_lang_data, \
+      outfile = file.split("/")[-1].split(".jsonl")[0]
+      if not force_overwrite and os.path.exists(output_dir+"/"+outfile+".jsonl"):
+        print ("file already exists", output_dir+"/"+outfile+".jsonl")
+        continue
+      with open(output_dir+"/"+outfile+".jsonl", "w") as outf:
+        with multiprocessing.Pool(processes=num_jobs) as pool:
+          for idx, l in tqdm.tqdm(enumerate(pool.imap_unordered(functools.partial(process_non_code_lang_data, \
                                                                       min_text_len=min_text_len, lang=lang, \
-                                                                      header_footer_dedup_len = header_footer_dedup_len, \
-                                                                      cleanup_header_footer_sent_len = cleanup_header_footer_sent_len, \
-                                                                      cleanup_num_header_footer_sent = cleanup_num_header_footer_sent, \
+                                                                      dedup_window = dedup_window, \
+                                                                      cleanup_header_footer_len = cleanup_header_footer_len, \
+                                                                      cleanup_num_header_footer = cleanup_num_header_footer, \
                                                                       cleanup_dup_para_len = cleanup_dup_para_len, \
                                                                       sentence_ratio = sentence_ratio, \
-                                                                      stopword_cutoff = stopword_cutoff, \
+                                                                      flagged_score_cutoff = flagged_score_cutoff, \
+                                                                      hate_score_cutoff = hate_score_cutoff, \
+                                                                      banned_score_cutoff = banned_score_cutoff, \
+                                                                      stopword_score_cutoff = stopword_score_cutoff, \
                                                                       junk_char_score_cutoff = junk_char_score_cutoff, \
                                                                       ngram_cutoff = ngram_cutoff, \
+                                                                      english_stopwords_header_ratio = english_stopwords_header_ratio, \
+                                                                      cleanup_header_footer_agressive= cleanup_header_footer_agressive, \
                                                                       ), yield_jsonl(file), buffer_size))):
                       if l:
                           outf.write (l+"\n")
